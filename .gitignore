@@ -1,0 +1,47 @@
+# OS и редакторы
+.DS_Store
+.AppleDouble
+.LSOverride
+.idea/
+.vscode/
+.devcontainer
+*~
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.tox/
+htmlcov/
+.python-version
+pip-log.txt
+
+# Виртуальные окружения
+venv/
+.venv/
+
+# Секреты и локальные настройки
+.env
+.env.*
+!.env.example
+*.key
+local_settings.py
+local_settings*.py
+
+# Логи и временное
+logs/
+*.log
+tmp/
+.cache/
+media/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# БД и прочее
+*.db
+*.pid
