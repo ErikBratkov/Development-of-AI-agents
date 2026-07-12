@@ -1,0 +1,42 @@
+[project]
+name = "voice-assistant"
+version = "0.1.0"
+description = "Учебный демо-сервис голосового ассистента (ДЗ к урокам 9 и 11)"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic-settings>=2.3",
+    "openai>=1.40",
+    "numpy>=1.26",
+    # extra socks нужен для системных прокси вида socks5://
+    "httpx[socks]>=0.27",
+]
+
+[project.optional-dependencies]
+# аудио-часть опциональна, без нее сервис работает в текстовом режиме
+audio = [
+    "faster-whisper>=1.1",
+    "piper-tts>=1.2",
+]
+# база знаний в Neo4j и локальные эмбеддинги для гибридного поиска,
+# без этой группы инструмент search_knowledge вежливо откажет.
+# faker нужен генератору данных (data-generator), которым скрипт
+# seed_knowledge.py наполняет базу
+rag = [
+    "neo4j>=5.20",
+    "sentence-transformers>=3.0",
+    "faker>=26",
+]
+# faker в dev нужен тестам генератора данных
+dev = [
+    "pytest>=8",
+    "faker>=26",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]

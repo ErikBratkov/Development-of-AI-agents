@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Голосовой ассистент - демо</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>Голосовой ассистент</h1>
+      <div id="status" class="status">подключение...</div>
+    </header>
+
+    <section id="chat" class="chat"></section>
+
+    <section class="controls">
+      <button id="recBtn" class="rec" disabled>
+        Удерживайте для записи
+      </button>
+      <form id="textForm" class="text-form">
+        <input id="textInput" type="text"
+               placeholder="или напишите текстом..."
+               autocomplete="off">
+        <button type="submit">Отправить</button>
+      </form>
+    </section>
+
+    <p id="hint" class="hint"></p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
