@@ -8,9 +8,10 @@ def test_specs_and_handlers_consistent() -> None:
 
 
 def test_expected_tools_registered() -> None:
-    """В реестре оба инструмента - погода и база знаний"""
+    """В реестре погода, поиск по базе знаний и агрегация"""
     assert "get_weather" in TOOL_HANDLERS
     assert "search_knowledge" in TOOL_HANDLERS
+    assert "aggregate_knowledge" in TOOL_HANDLERS
 
 
 def test_specs_shape() -> None:

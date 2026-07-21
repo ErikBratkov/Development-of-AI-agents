@@ -8,6 +8,7 @@ from typing import Any
 import openai
 
 from app.config import Settings
+from app.reasoning_filter import ReasoningFilter, clean_reasoning
 from app.tools import TOOL_HANDLERS, TOOLS_SPEC
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,10 @@ class LlmClient:
         Наружу уходят только текстовые токены, вызовы инструментов
         для Dialogue Manager прозрачны
 
+        Служебные рассуждения модели (блоки thought и подобные)
+        наружу не отдаются - в контекст диалога с моделью идет сырой
+        текст, а клиенту только очищенный
+
         Повторы делаются только до старта стрима, обрыв уже начатой
         генерации отдаем наружу как есть
         """
@@ -70,6 +75,7 @@ class LlmClient:
             )
             content_parts: list[str] = []
             tool_calls: dict[int, dict[str, str]] = {}
+            reasoning_filter = ReasoningFilter()
             async for chunk in stream:
                 if not chunk.choices:
                     continue
@@ -78,7 +84,9 @@ class LlmClient:
                     continue
                 if delta.content:
                     content_parts.append(delta.content)
-                    yield delta.content
+                    cleaned = reasoning_filter.feed(delta.content)
+                    if cleaned:
+                        yield cleaned
                 # аргументы вызова приходят кусками, склеиваем по index
                 for call in delta.tool_calls or []:
                     acc = tool_calls.setdefault(
@@ -90,6 +98,9 @@ class LlmClient:
                         acc["name"] = call.function.name
                     if call.function and call.function.arguments:
                         acc["arguments"] += call.function.arguments
+            tail = reasoning_filter.flush()
+            if tail:
+                yield tail
             if not tool_calls:
                 return
             ordered = [tool_calls[index] for index in sorted(tool_calls)]
@@ -159,7 +170,8 @@ class LlmClient:
         if not response.choices:
             return ""
         content = response.choices[0].message.content
-        return content or ""
+        # рассуждения модели в summary тоже не нужны
+        return clean_reasoning(content or "")
 
     async def _create_with_retries(
         self,

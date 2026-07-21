@@ -117,6 +117,50 @@ def test_stream_chat_plain_text(settings: Settings) -> None:
     assert messages == [{"role": "user", "content": "поздоровайся"}]
 
 
+def test_stream_chat_filters_reasoning(settings: Settings) -> None:
+    """Служебные рассуждения модели не доходят до клиента"""
+    stream = FakeStream(
+        [
+            content_chunk("<thought>secret english plan</thought>"),
+            content_chunk("Привет"),
+        ]
+    )
+    client, _ = make_client(settings, [stream])
+    tokens = collect_tokens(
+        client.stream_chat([{"role": "user", "content": "привет"}])
+    )
+    assert "".join(tokens) == "Привет"
+
+
+def test_stream_chat_flushes_tail_before_tool(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Хвост фильтра не теряется при переходе к вызову инструмента
+
+    Обычный текст из буфера доезжает до клиента до паузы на
+    инструмент, а придержанная строка-маркер выбрасывается
+    """
+
+    async def kb_echo(question: str) -> str:
+        return "данные: " + question
+
+    monkeypatch.setitem(
+        llm_client_module.TOOL_HANDLERS, "kb_echo", kb_echo
+    )
+    first = FakeStream(
+        [
+            content_chunk("Смотрю в базе\nThought"),
+            tool_call_chunk("call-1", "kb_echo", '{"question": "кто"}'),
+        ]
+    )
+    second = FakeStream([content_chunk("готово")])
+    client, _ = make_client(settings, [first, second])
+    tokens = collect_tokens(
+        client.stream_chat([{"role": "user", "content": "вопрос"}])
+    )
+    assert "".join(tokens) == "Смотрю в базе\nготово"
+
+
 def test_stream_chat_runs_tool_and_continues(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:

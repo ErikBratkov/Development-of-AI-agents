@@ -28,7 +28,10 @@ KNOWLEDGE_TOOL_SPEC: dict[str, Any] = {
             "Ищет ответ во внутренней базе знаний о сотрудниках, "
             "компаниях, проектах и технологиях. Используй, когда "
             "пользователь спрашивает про людей, их навыки, проекты, "
-            "команды или стек технологий."
+            "команды или стек технологий. Для полных списков, "
+            "подсчетов и вопросов про минимальный или максимальный "
+            "опыт используй aggregate_knowledge - этот поиск отдает "
+            "только несколько ближайших фрагментов."
         ),
         "parameters": {
             "type": "object",
@@ -43,6 +46,73 @@ KNOWLEDGE_TOOL_SPEC: dict[str, Any] = {
             "required": ["question"],
         },
     },
+}
+
+# векторный top_k поиск плохо отвечает на вопросы "перечисли всех" или
+# "сколько всего" - в выборку попадает лишь несколько фрагментов.
+# Для таких вопросов отдельный инструмент с точными Cypher запросами
+# по всему графу, без векторного поиска
+AGGREGATE_TOOL_SPEC: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "aggregate_knowledge",
+        "description": (
+            "Точные списки и подсчеты по всей базе знаний. Используй "
+            "для вопросов вида 'перечисли всех сотрудников', 'сколько "
+            "всего проектов', 'у кого меньше всего опыта' - обычный "
+            "поиск для них может вернуть неполный результат."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entity": {
+                    "type": "string",
+                    "enum": [
+                        "person", "company", "technology", "project",
+                    ],
+                    "description": "О каких сущностях вопрос",
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": [
+                        "list", "count",
+                        "min_experience", "max_experience",
+                    ],
+                    "description": (
+                        "list - полный список, count - точное "
+                        "количество, min_experience и max_experience - "
+                        "сотрудники с наименьшим или наибольшим опытом "
+                        "(только для person)"
+                    ),
+                },
+            },
+            "required": ["entity", "operation"],
+        },
+    },
+}
+
+# метки узлов графа по значениям enum из спеки инструмента, метка
+# попадает в текст Cypher только из этого белого списка
+AGGREGATE_LABELS: dict[str, str] = {
+    "person": "Person",
+    "company": "Company",
+    "technology": "Technology",
+    "project": "Project",
+}
+
+# какое поле кроме имени показать в полном списке
+AGGREGATE_EXTRA_FIELD: dict[str, str] = {
+    "person": "position",
+    "technology": "category",
+    "project": "status",
+}
+
+# названия сущностей в родительном падеже для ответов про количество
+AGGREGATE_COUNT_TITLES: dict[str, str] = {
+    "person": "сотрудников",
+    "company": "компаний",
+    "technology": "технологий",
+    "project": "проектов",
 }
 
 # векторный поиск фрагментов лексического графа по эмбеддингу вопроса,
@@ -79,6 +149,87 @@ def build_facts_query(max_hops: int) -> str:
         "RETURN a.name AS subject, rel_type AS relation, b.name AS object\n"
         "LIMIT $max_facts"
     )
+
+
+def build_list_query(entity: str) -> str:
+    """Собирает Cypher полного списка сущностей одного типа
+
+    Метка узла берется только из белого списка AGGREGATE_LABELS,
+    значения от модели в текст запроса не попадают
+    """
+    label = AGGREGATE_LABELS.get(entity)
+    if label is None:
+        raise ValueError(f"неизвестный тип сущности '{entity}'")
+    extra = AGGREGATE_EXTRA_FIELD.get(entity)
+    extra_part = f", n.{extra} AS extra" if extra else ""
+    return (
+        f"MATCH (n:{label}) "
+        f"RETURN n.name AS name{extra_part} ORDER BY n.name"
+    )
+
+
+def build_count_query(entity: str) -> str:
+    """Собирает Cypher точного подсчета сущностей одного типа"""
+    label = AGGREGATE_LABELS.get(entity)
+    if label is None:
+        raise ValueError(f"неизвестный тип сущности '{entity}'")
+    return f"MATCH (n:{label}) RETURN count(n) AS total"
+
+
+def build_experience_query(operation: str) -> str:
+    """Собирает Cypher поиска сотрудников с крайним значением опыта
+
+    Отдает всех людей с минимальным или максимальным опытом, а не
+    одного - экстремум может делиться на нескольких. Отсутствующий
+    опыт считается нулем, иначе люди с незаполненным полем молча
+    выпадали бы из ответа
+    """
+    if operation not in ("min_experience", "max_experience"):
+        raise ValueError("операция должна быть min_ или max_experience")
+    func = "min" if operation == "min_experience" else "max"
+    return (
+        "MATCH (p:Person)\n"
+        f"WITH {func}(coalesce(p.experience, 0)) AS target\n"
+        "MATCH (p:Person)\n"
+        "WHERE coalesce(p.experience, 0) = target\n"
+        "RETURN p.name AS name, p.position AS extra,\n"
+        "       p.experience AS experience\n"
+        "ORDER BY p.name"
+    )
+
+
+def format_aggregate_result(
+    entity: str, operation: str, rows: list[dict[str, Any]]
+) -> str:
+    """Собирает результат агрегации в текст для модели"""
+    if operation == "count":
+        total = rows[0].get("total", 0) if rows else 0
+        return (
+            "Точное количество "
+            + AGGREGATE_COUNT_TITLES[entity] + ": " + str(total)
+        )
+    if not rows:
+        return "В базе знаний нет ни одной записи такого типа"
+    if operation == "list":
+        lines = [
+            "Полный список, всего "
+            + AGGREGATE_COUNT_TITLES[entity] + " " + str(len(rows)) + ":"
+        ]
+    else:
+        word = (
+            "наименьшим" if operation == "min_experience"
+            else "наибольшим"
+        )
+        lines = [f"Сотрудники с {word} опытом:"]
+    for row in rows:
+        line = "- " + str(row.get("name", ""))
+        extra = row.get("extra")
+        if extra:
+            line += " (" + str(extra) + ")"
+        if row.get("experience") is not None:
+            line += ", опыт в годах: " + str(row["experience"])
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def format_fact(row: dict[str, Any]) -> str:
@@ -136,11 +287,17 @@ class KnowledgeBase:
         self._driver = driver
 
     @property
+    def graph_available(self) -> bool:
+        """Есть ли хоть какой-то способ достучаться до БД
+
+        Для точных запросов по графу модель эмбеддингов не нужна
+        """
+        return self._driver is not None or AsyncGraphDatabase is not None
+
+    @property
     def available(self) -> bool:
         """Есть ли эмбеддинги и хоть какой-то способ достучаться до БД"""
-        if not self._embedder.available:
-            return False
-        return self._driver is not None or AsyncGraphDatabase is not None
+        return self._embedder.available and self.graph_available
 
     def warmup(self) -> None:
         """Синхронно загружает модель эмбеддингов"""
@@ -167,6 +324,47 @@ class KnowledgeBase:
         if not context:
             return "В базе знаний ничего не найдено по этому вопросу"
         return context
+
+    async def aggregate(self, entity: str, operation: str) -> str:
+        """Точный ответ по всему графу - список, подсчет или экстремум"""
+        if entity not in AGGREGATE_LABELS:
+            return f"Неизвестный тип сущности '{entity}'"
+        experience_ops = ("min_experience", "max_experience")
+        if operation not in ("list", "count") + experience_ops:
+            return f"Неизвестная операция '{operation}'"
+        if operation in experience_ops and entity != "person":
+            return "Опыт есть только у сотрудников, укажи entity person"
+        if not self.graph_available:
+            return (
+                "База знаний не установлена на сервере, "
+                "ответить по ней не получится"
+            )
+        if operation == "list":
+            query = build_list_query(entity)
+        elif operation == "count":
+            query = build_count_query(entity)
+        else:
+            query = build_experience_query(operation)
+        try:
+            rows = await self._run_query(query)
+        except Exception:
+            logger.exception("сбой точного запроса к базе знаний")
+            return "База знаний сейчас недоступна, попробуйте позже"
+        return format_aggregate_result(entity, operation, rows)
+
+    async def _run_query(self, query: str) -> list[dict[str, Any]]:
+        """Выполняет готовый Cypher без параметров и отдает строки"""
+        driver = self._ensure_driver()
+        async with driver.session(
+            database=self._settings.neo4j_database
+        ) as session:
+            return await session.execute_read(self._fetch_rows, query)
+
+    @staticmethod
+    async def _fetch_rows(tx: Any, query: str) -> list[dict[str, Any]]:
+        """Читает все строки результата одного запроса"""
+        result = await tx.run(query)
+        return await result.data()
 
     async def _retrieve(
         self, vector: list[float]
@@ -254,6 +452,11 @@ def get_knowledge_base() -> KnowledgeBase:
 async def search_knowledge(question: str) -> str:
     """Обработчик инструмента search_knowledge для LLM"""
     return await get_knowledge_base().search(question)
+
+
+async def aggregate_knowledge(entity: str, operation: str) -> str:
+    """Обработчик инструмента aggregate_knowledge для LLM"""
+    return await get_knowledge_base().aggregate(entity, operation)
 
 
 async def warmup_knowledge_base() -> None:
