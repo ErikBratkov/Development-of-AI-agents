@@ -1,0 +1,29 @@
+services:
+  neo4j:
+    image: neo4j:5
+    container_name: graph-demo-neo4j
+    ports:
+      # веб-интерфейс браузера
+      - "7474:7474"
+      # протокол bolt для драйвера
+      - "7687:7687"
+    environment:
+      # креды только для локального демо, в бою так делать нельзя
+      NEO4J_AUTH: neo4j/graphdemo42
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - cypher-shell
+        - -u
+        - neo4j
+        - -p
+        - graphdemo42
+        - RETURN 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  neo4j_data:

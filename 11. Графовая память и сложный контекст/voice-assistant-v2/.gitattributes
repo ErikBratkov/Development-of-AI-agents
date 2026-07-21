@@ -1,0 +1,4 @@
+# batch файлы для Windows должны иметь переводы строк CRLF,
+# иначе cmd.exe сбивается при разборе строк с кириллицей в UTF-8
+*.cmd text eol=crlf
+*.bat text eol=crlf
